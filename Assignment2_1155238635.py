@@ -89,12 +89,30 @@ class MyDataset(Dataset):
 class AE(nn.Module):
     def __init__(self):
         super(AE, self).__init__()
-        self.encoder = nn.Sequential(
 
+        self.input_dim = 25024
+        self.encoder = nn.Sequential(
+            nn.Linear(self.input_dim, 8224),
+            nn.ReLU(),
+            nn.Linear(8224, 2056),
+            nn.ReLU(),
+            nn.Linear(2056, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
         )
 
         self.decoder = nn.Sequential(
-
+            nn.Linear(256, 512),
+            nn.ReLU(),
+            nn.Linear(512, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 2056),
+            nn.ReLU(),
+            nn.Linear(2056, 8224),
+            nn.ReLU(),
+            nn.Linear(8224, self.input_dim)
         )
 
     def forward(self, x):
@@ -130,12 +148,85 @@ def problem_5(tensor_file):
             
     return losses
 
+
+class BetterAE(nn.Module):
+    def __init__(self):
+        super(BetterAE, self).__init__()
+        self.input_dim = 25024
+
+        self.encoder = nn.Sequential(
+            nn.Linear(self.input_dim, 8224),
+            nn.BatchNorm1d(8224),
+            nn.LeakyReLU(0.2),
+
+            nn.Linear(8224, 2056),
+            nn.BatchNorm1d(2056),
+            nn.LeakyReLU(0.2),
+
+            nn.Linear(2056, 1024),
+            nn.BatchNorm1d(1024),
+            nn.LeakyReLU(0.2),
+
+            nn.Linear(1024, 512),
+            nn.BatchNorm1d(512),
+            nn.LeakyReLU(0.2),
+
+            nn.Linear(512, 256)  # Latent Space
+        )
+
+        self.decoder = nn.Sequential(
+            nn.Linear(256, 512),
+            nn.BatchNorm1d(512),
+            nn.LeakyReLU(0.2),
+
+            nn.Linear(512, 1024),
+            nn.BatchNorm1d(1024),
+            nn.LeakyReLU(0.2),
+
+            nn.Linear(1024, 2056),
+            nn.BatchNorm1d(2056),
+            nn.LeakyReLU(0.2),
+
+            nn.Linear(2056, 8224),
+            nn.BatchNorm1d(8224),
+            nn.LeakyReLU(0.2),
+
+            nn.Linear(8224, self.input_dim)
+        )
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return decoded, encoded
+
 # Problem 6
 def problem_6(tensor_file):
     # write your logic here   
+    loaded_tensor = torch.load(tensor_file, weights_only=True)
+    dataset = MyDataset(loaded_tensor)
+    dataloader = DataLoader(dataset, batch_size=25, shuffle=False)
+
+    model = BetterAE()
+    loss_function = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-8)
+    epochs = 20
     losses = []
-      
-    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    for epoch in range(epochs):
+        loss1 = []
+        for audio in dataloader:
+            audio = audio.view(-1, 2 * 32 * 391).to(device)
+            reconstructed = model(audio)[0]
+            loss = loss_function(reconstructed, audio)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            loss1.append(loss.item())
+
+        losses.append(sum(loss1) / len(loss1))
+
     return losses
 
 
