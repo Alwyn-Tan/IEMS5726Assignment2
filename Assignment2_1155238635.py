@@ -24,7 +24,7 @@ def problem_2(df, k=5, t=0.2):
 # Problem 3
 def problem_3(filename, column_label):
     # write your logic here, df is a dataframe instead
-    df = pd.read_csv('problem3.csv')
+    df = pd.read_csv(filename)
     dummies = pd.get_dummies(df[column_label], dtype=int)
     df=pd.concat([df,dummies],axis=1)
 
@@ -90,7 +90,8 @@ class AE(nn.Module):
     def __init__(self):
         super(AE, self).__init__()
 
-        self.input_dim = 25024
+        self.input_dim = 2 * 32 * 391
+
         self.encoder = nn.Sequential(
             nn.Linear(self.input_dim, 8224),
             nn.ReLU(),
@@ -121,7 +122,7 @@ class AE(nn.Module):
         return decoded, encoded
 
 def problem_5(tensor_file):
-    loaded_tensor = torch.load(tensor_file, weights_only=True)
+    loaded_tensor = torch.load(tensor_file)
     dataset = MyDataset(loaded_tensor)
     dataloader = DataLoader(dataset, batch_size=25, shuffle=False)
     
@@ -130,7 +131,8 @@ def problem_5(tensor_file):
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-8)
     epochs = 20
     losses = []
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # note that the program is run on Apple Silicon
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     model.to(device)
     
     for epoch in range(epochs):
@@ -149,10 +151,29 @@ def problem_5(tensor_file):
     return losses
 
 
+
+class MyBetterDataset(Dataset):
+    def __init__(self, tensors, mean=None, std=None):
+        self.tensors = tensors
+        self.mean = mean
+        self.std = std
+
+    def __len__(self):
+        return len(self.tensors)
+
+    def __getitem__(self, idx):
+        x_orig = self.tensors[idx].flatten().float()
+        if self.mean is not None and self.std is not None:
+            x_norm = (x_orig - self.mean) / (self.std + 1e-8)
+        else:
+            x_norm = x_orig
+        return x_norm, x_orig
+
+
 class BetterAE(nn.Module):
     def __init__(self):
         super(BetterAE, self).__init__()
-        self.input_dim = 25024
+        self.input_dim = 2 * 32 * 391
 
         self.encoder = nn.Sequential(
             nn.Linear(self.input_dim, 8224),
@@ -171,7 +192,7 @@ class BetterAE(nn.Module):
             nn.BatchNorm1d(512),
             nn.LeakyReLU(0.2),
 
-            nn.Linear(512, 256)  # Latent Space
+            nn.Linear(512, 256)
         )
 
         self.decoder = nn.Sequential(
@@ -199,11 +220,15 @@ class BetterAE(nn.Module):
         decoded = self.decoder(encoded)
         return decoded, encoded
 
-# Problem 6
+
 def problem_6(tensor_file):
-    # write your logic here   
-    loaded_tensor = torch.load(tensor_file, weights_only=True)
-    dataset = MyDataset(loaded_tensor)
+    loaded_tensor = torch.load(tensor_file)
+
+    flat = loaded_tensor.flatten(1).float()
+    mean = flat.mean()
+    std = flat.std().clamp_min(1e-4)
+
+    dataset = MyBetterDataset(loaded_tensor, mean, std)
     dataloader = DataLoader(dataset, batch_size=25, shuffle=False)
 
     model = BetterAE()
@@ -211,23 +236,36 @@ def problem_6(tensor_file):
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-8)
     epochs = 20
     losses = []
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     model.to(device)
 
+    mean_d = mean.to(device)
+    std_d = std.to(device)
+
+    model.train()
     for epoch in range(epochs):
-        loss1 = []
-        for audio in dataloader:
-            audio = audio.view(-1, 2 * 32 * 391).to(device)
-            reconstructed = model(audio)[0]
-            loss = loss_function(reconstructed, audio)
+        loss_epoch = []
+        for x_norm, x_orig in dataloader:
+            x_norm = x_norm.to(device)
+            x_orig = x_orig.to(device)
+
+            recon_norm, _ = model(x_norm)
+
+            recon_orig = recon_norm * std_d + mean_d
+
+            loss = loss_function(recon_orig, x_orig)
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            loss1.append(loss.item())
 
-        losses.append(sum(loss1) / len(loss1))
+            loss_epoch.append(loss.item())
+
+        losses.append(sum(loss_epoch) / len(loss_epoch))
 
     return losses
+
 
 
 if __name__ == "__main__":
